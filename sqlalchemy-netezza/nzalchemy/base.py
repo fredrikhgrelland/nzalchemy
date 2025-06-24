@@ -888,11 +888,13 @@ class NetezzaDialect(default.DefaultDialect):
     #referenced
     def _get_default_schema_name(self, connection):
         log.debug("-->")
-        return connection.scalar(text("select current_schema"))
+        result = connection.execute(text("select current_schema"))
+        return result.scalar_one()
 
     def _get_current_schema_name(self, connection):
         log.debug("-->")
-        return connection.scalar(text("select current_schema"))
+        result = connection.execute(text("select current_schema"))
+        return result.scalar_one()
 
     def is_system_in_lowercase(self):
         log.debug("-->")
@@ -1067,11 +1069,12 @@ class NetezzaDialect(default.DefaultDialect):
         if not self.is_system_in_lowercase():
             schema=self.denormalize_name(schema)
 
+        params = {"schema": schema if schema is not None else self.default_schema_name}
         result = connection.execute(
             sql.text(
             "select viewname as name from _v_view where objid > 200000 and schema = :schema" 
             ).columns(viewname=sqltypes.Unicode),
-            schema=schema if schema is not None else self.default_schema_name,
+            params
         )
         view_name = [r[0] for r in result]
         return view_name
@@ -1106,7 +1109,7 @@ class NetezzaDialect(default.DefaultDialect):
                 "coldefault as defaultval,not a.attnotnull as nullable, a.attcolleng as length, a.format_type, "
                 "description FROM _v_relation_column a WHERE a.objid = :table_oid ORDER BY a.attnum ").columns(table_oid=sqltypes.Unicode)
                 
-        c = connection.execute(s, table_oid=table_oid)
+        c = connection.execute(s, {"table_oid": table_oid})
         rows = c.fetchall()
         # format columns
         columns = []
@@ -1114,11 +1117,14 @@ class NetezzaDialect(default.DefaultDialect):
             coltype_class, has_length = oid_datatype_map[typeid]
             if coltype_class is sqltypes.Numeric:
                 if self.is_system_in_lowercase():               
-                    precision, scale = re.match(r'numeric\((\d+),(\d+)\)', format_type).groups()
+                    m = re.match(r'numeric\\((\\d+),(\\d+)\\)', format_type)
                 else:
-                    precision, scale = re.match(r'NUMERIC\((\d+),(\d+)\)', format_type).groups()
-
-                coltype = coltype_class(int(precision), int(scale))
+                    m = re.match(r'NUMERIC\\((\\d+),(\\d+)\\)', format_type)
+                if m:
+                    precision, scale = m.groups()
+                    coltype = coltype_class(int(precision), int(scale))
+                else:
+                    coltype = coltype_class()
             elif has_length:
                 coltype = coltype_class(length)
             else:
@@ -1140,11 +1146,11 @@ class NetezzaDialect(default.DefaultDialect):
         )
         PK_SQL = "select attname from _v_relation_keydata where objid = :table_oid and contype = 'p'"
         t = sql.text(PK_SQL).columns(attname=sqltypes.Unicode)
-        c = connection.execute(t, table_oid=table_oid)
+        c = connection.execute(t, {"table_oid": table_oid})
         cols = [r[0] for r in c.fetchall()]
         PK_CONS_SQL = "select constraintname from _v_relation_keydata where objid = :table_oid and contype = 'p'"
         t = sql.text(PK_CONS_SQL).columns(constraintname=sqltypes.Unicode)
-        c = connection.execute(t, table_oid=table_oid)
+        c = connection.execute(t, {"table_oid": table_oid})
         name = c.scalar()
         
         return {"constrained_columns": cols, "name": name}        
@@ -1168,11 +1174,13 @@ class NetezzaDialect(default.DefaultDialect):
 
 
         FK_SQL = "select constraintname, attname,pkschema,pkrelation,pkattname from _v_relation_keydata where objid = :table_oid and contype = 'f' and schema = :schemaname"     
+        params = {
+            "table_oid": table_oid,
+            "schemaname": schema if schema is not None else self.default_schema_name,
+        }
         c = connection.execute(
-            sql.text(FK_SQL
-            ).columns(table_oid=sqltypes.Unicode), 
-            table_oid=table_oid,
-            schemaname=schema if schema is not None else self.default_schema_name,
+            sql.text(FK_SQL).columns(table_oid=sqltypes.Unicode), 
+            params
         )        
         fkeys = []
         for conname, attname, pkschema, pkrelation , pkattname in c.fetchall():
@@ -1210,7 +1218,7 @@ class NetezzaDialect(default.DefaultDialect):
         )
         UNIQUE_SQL = "select constraintname as name, attname as col_name, conseq as col_num from _v_relation_keydata where objid = :table_oid and contype = 'u' order by conseq ASC"
         t = sql.text(UNIQUE_SQL).columns(col_name=sqltypes.Unicode)
-        c = connection.execute(t, table_oid=table_oid)
+        c = connection.execute(t, {"table_oid": table_oid})
         uniques = defaultdict(lambda: defaultdict(dict))
         for name, col_name, col_num in c.fetchall():
             name = name
@@ -1228,13 +1236,8 @@ class NetezzaDialect(default.DefaultDialect):
             connection, table_name, schema, info_cache=kw.get("info_cache")
         )
         COMMENT_SQL = "select description from _t_description where objoid = :table_oid"
-        c = connection.execute(sql.text(COMMENT_SQL), table_oid=table_oid)        
+        c = connection.execute(sql.text(COMMENT_SQL), {"table_oid": table_oid})        
         return {"text": c.scalar()}
-
-    @reflection.cache
-    def get_check_constraints(self, connection, table_name, schema=None, **kw):
-        log.debug("-->")
-        return []
 
 '''
 Query should be in format
@@ -1295,5 +1298,5 @@ def visit_create_table_as(element, compiler, **_kwargs):
         select = element.select_query,
         distribute = element.distribute_clause(),
     )
-    return createStmt + element.organize_clause() 
+    return createStmt + element.organize_clause()
 

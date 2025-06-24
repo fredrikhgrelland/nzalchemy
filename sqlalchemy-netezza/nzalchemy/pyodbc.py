@@ -20,7 +20,6 @@ Examples of pyodbc connection string URLs:
 
 """
 
-from sqlalchemy import processors
 from .base import NetezzaExecutionContext, NetezzaDialect, log
 from sqlalchemy.connectors.pyodbc import PyODBCConnector
 from sqlalchemy import types as sqltypes, util
@@ -62,14 +61,27 @@ class _netezzaNumeric_pyodbc(sqltypes.Numeric):
                 return value
 
         return process
-        
-    def result_processor(self, dialect, coltype):        
+
+    def result_processor(self, dialect, coltype):
+        # SQLAlchemy 2.x: processors are not available, so handle decimals directly
         if self.asdecimal:
-            return processors.to_decimal_processor_factory(
-                decimal.Decimal, self._effective_decimal_return_scale
-            )
-        elif dialect.supports_native_decimal:
-            return processors.to_float
+            def process(value):
+                if value is None:
+                    return None
+                try:
+                    return decimal.Decimal(value)
+                except Exception:
+                    return value
+            return process
+        elif getattr(dialect, 'supports_native_decimal', False):
+            def process(value):
+                if value is None:
+                    return None
+                try:
+                    return float(value)
+                except Exception:
+                    return value
+            return process
         else:
             return None        
 
