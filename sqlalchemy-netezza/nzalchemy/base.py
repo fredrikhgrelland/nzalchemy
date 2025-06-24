@@ -769,6 +769,8 @@ class NetezzaDialect(default.DefaultDialect):
     supports_comments = True
     supports_default_values = True
     supports_empty_insert = False
+    # SQLAlchemy 1.4+ statement cache support
+    supports_statement_cache = False  # Set to True if dialect supports caching after testing
     supports_multivalues_insert = True
     default_paramstyle = "qmark"
     ischema_names = ischema_names
